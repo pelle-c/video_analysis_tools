@@ -1,0 +1,9 @@
+numpy>=2
+matplotlib>=3.8
+opencv-python>=5
+pillow>=10
+pyyaml>=6
+scipy>=1.15
+torch
+torchvision
+ultralytics

@@ -1,0 +1,11 @@
+# Ignore the contents of subdirectories while keeping root-level files visible.
+/*/**
+
+# Python caches and virtual environments
+__pycache__/
+.venv/
+*.py[cod]
+
+# Local training outputs and model weights
+runs/
+*.pt
