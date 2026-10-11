@@ -23,7 +23,7 @@ python -m pip install -r requirements-yolo-training.txt
 
 ### `video_analyzer.py`
 
-Analyzes one MP4 file with a YOLO model. It reports detected tracked objects, can optionally show other detected object classes, and can save annotated images and car crops.
+Analyzes one MP4 file with a YOLO model. It reports detected object classes and can save one annotated image per detected class.
 
 Example:
 
@@ -37,8 +37,8 @@ Useful options:
 --model yolov8s.pt
 --confidence 0.45
 --imgsz 960
---show-other-objects
---save-car-crops
+--min-object-hits 5
+--annotated-dir annotated_objects
 ```
 
 ### `annotate_raw_videos.py`
@@ -49,7 +49,7 @@ Processes MP4 files from a raw video folder and creates training/review material
 - an annotated JPEG frame with detection rectangles
 - a YOLO `.txt` label file
 
-By default it scans `raw/`, writes flat output files to `raw_analyzed/`, and skips videos that already have a matching `.done` file. If no matching detections are saved from a video, the MP4 is copied to `raw_second_check/`.
+By default it scans `raw/`, writes flat output files to `raw_analyzed/`, and skips videos listed in `raw_analyzed/analyzed_videos.txt`. Existing `.done` marker files are imported into that list automatically. If no matching detections are saved from a video, the MP4 is copied to `raw_second_check/`.
 
 Run on all new MP4 files in `raw/`:
 
@@ -67,6 +67,7 @@ Useful options:
 
 ```bash
 --model yolov8s.pt
+--second-model runs/detect/train-6/weights/best.pt
 --confidence 0.35
 --imgsz 960
 --images-per-video 10
@@ -131,6 +132,60 @@ r           reset / go back
 q / Esc     quit
 ```
 
+### `change_label_class.py`
+
+Changes the class ID in every YOLO `.txt` label file in a folder while keeping the bounding box coordinates unchanged.
+
+Change every label in one folder to class `2`:
+
+```bash
+python change_label_class.py raw_analyzed/robot_mower 2
+```
+
+Include subfolders:
+
+```bash
+python change_label_class.py dataset/labels 2 --recursive
+```
+
+Preview changes without writing files:
+
+```bash
+python change_label_class.py raw_analyzed/robot_mower 2 --dry-run
+```
+
+### `prefix_labels_by_class.py`
+
+Renames every YOLO `.txt` label file and matching JPEG in a folder to start with the class name from `dataset/data.yaml`.
+
+Preview changes:
+
+```bash
+python prefix_labels_by_class.py extracted_frames/wrong_dogs --dry-run
+```
+
+Rename files:
+
+```bash
+python prefix_labels_by_class.py extracted_frames/wrong_dogs
+```
+
+### `move_val_labels_for_images.py`
+
+Moves matching label files from `dataset/labels/train` to `dataset/labels/val` for every JPEG in `dataset/images/val`.
+
+Preview changes:
+
+```bash
+python move_val_labels_for_images.py --dry-run
+```
+
+Move the labels:
+
+```bash
+python move_val_labels_for_images.py
+```
+
 ## Training
 
 YOLO datasets use matching image and label paths:
@@ -169,8 +224,8 @@ yolo detect train model=yolov8s.pt data=dataset/data.yaml epochs=50 imgsz=960 ba
 - Extract jpeg images from the subfolder above `python extract_video_frames.py raw_second_check/animals`
 - For every extracted imaged, make a rectangle and choose class - ´python label_image_rectangle.py extracted_frames --class-id 2`
 - Move jpegs and txt-files into data_set-folders
-- Train... `yolo detect train model=yolov8s.pt data=dataset/data.yaml epochs=50 imgsz=960`
-
+- Train... `yolo detect train model=yolov8s.pt data=dataset/data.yaml epochs=50 imgsz=960 batch=1 workers=0 cache=False plots=False device=cpu`
+ 
 ## Analyze video
 
-- `python arlo_analyzer.py /home/pc/tmp/arlo/katt2.mp4 --model runs/detect/train-6/weights/best.pt --confidence 0.35 --min-object-hits 5 --imgsz 960`
+- `python video_analyzer.py raw/AHB14578D20FA_000004fe_20260415_014820.mp4 --model runs/detect/train-4/weights/best.pt --confidence 0.35 --min-object-hits 5 --imgsz 960`

@@ -10,6 +10,7 @@ import cv2
 
 DEFAULT_MODEL = "yolov8s.pt"
 # DEFAULT_MODEL = "runs/detect/train-6/weights/best.pt"
+ANALYZED_LIST_FILENAME = "analyzed_videos.txt"
 DATASET_CLASSES = ["cat",  "dog", "robot_mower", "person","car"]
 CLASS_ALIASES = {
     "automower": "robot_mower",
@@ -51,6 +52,13 @@ def parse_args():
         "--model",
         default=DEFAULT_MODEL,
         help=f"YOLO model path or name. Default: {DEFAULT_MODEL}.",
+    )
+    parser.add_argument(
+        "--second-model",
+        help=(
+            "YOLO model path or name to try if the first model saves no detections. "
+            "Default: disabled."
+        ),
     )
     parser.add_argument(
         "--confidence",
@@ -154,6 +162,44 @@ def get_videos(args):
     return find_videos(args.raw_dir, args.recursive)
 
 
+def get_analyzed_list_path(output_dir):
+    return Path(output_dir) / ANALYZED_LIST_FILENAME
+
+
+def load_analyzed_video_keys(analyzed_list_path):
+    if not analyzed_list_path.exists():
+        return set()
+
+    return {
+        line.strip()
+        for line in analyzed_list_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    }
+
+
+def write_analyzed_video_keys(analyzed_list_path, analyzed_video_keys):
+    analyzed_list_path.parent.mkdir(parents=True, exist_ok=True)
+    text = "\n".join(sorted(analyzed_video_keys))
+    analyzed_list_path.write_text(text + ("\n" if text else ""), encoding="utf-8")
+
+
+def migrate_done_files(output_dir, analyzed_list_path):
+    output_path = Path(output_dir)
+    analyzed_video_keys = load_analyzed_video_keys(analyzed_list_path)
+    done_keys = {done_path.stem for done_path in output_path.glob("*.done")}
+    new_keys = done_keys - analyzed_video_keys
+
+    if new_keys:
+        analyzed_video_keys.update(new_keys)
+        write_analyzed_video_keys(analyzed_list_path, analyzed_video_keys)
+        print(
+            f"Added {len(new_keys)} existing .done marker(s) to "
+            f"'{analyzed_list_path}'."
+        )
+
+    return analyzed_video_keys
+
+
 def get_dataset_class_id(box, names, class_ids_by_name):
     model_class_id = int(box.cls)
     model_class_name = names.get(model_class_id, f"class {model_class_id}")
@@ -254,13 +300,9 @@ def write_label_file(label_path, boxes, frame_shape, names, class_ids_by_name):
     label_path.write_text("\n".join(labels) + ("\n" if labels else ""), encoding="utf-8")
 
 
-def annotate_video(video_path, model, args, class_ids_by_name):
+def scan_video(video_path, model, args, class_ids_by_name):
     output_dir = Path(args.output_dir)
     video_key = safe_filename(video_path.stem)
-    done_path = output_dir / f"{video_key}.done"
-    if done_path.exists():
-        print(f"Skipping {video_path}; already analyzed.")
-        return None
 
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
@@ -322,13 +364,42 @@ def annotate_video(video_path, model, args, class_ids_by_name):
     finally:
         cap.release()
 
+    return saved_count
+
+
+def annotate_video(
+    video_path,
+    model,
+    second_model,
+    args,
+    class_ids_by_name,
+    analyzed_video_keys,
+    analyzed_list_path,
+):
+    output_dir = Path(args.output_dir)
+    video_key = safe_filename(video_path.stem)
+    if video_key in analyzed_video_keys:
+        print(f"Skipping {video_path}; already analyzed.")
+        return None
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_count = scan_video(video_path, model, args, class_ids_by_name)
+    if saved_count == 0 and second_model is not None:
+        print(
+            f"  No detections saved with '{args.model}'. "
+            f"Trying '{args.second_model}'..."
+        )
+        saved_count = scan_video(video_path, second_model, args, class_ids_by_name)
+
     if saved_count == 0:
         print(f"Warning: No matching detections were saved from '{video_path}'.")
         second_check_dir = Path(args.second_check_dir)
         second_check_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(video_path, second_check_dir / video_path.name)
 
-    done_path.write_text(f"{saved_count}\n", encoding="utf-8")
+    analyzed_video_keys.add(video_key)
+    write_analyzed_video_keys(analyzed_list_path, analyzed_video_keys)
     return saved_count
 
 
@@ -340,15 +411,26 @@ def main():
         return 1
 
     model = load_model(args.model)
+    second_model = load_model(args.second_model) if args.second_model else None
     class_ids_by_name = parse_dataset_classes(args.classes)
     os.makedirs(args.output_dir, exist_ok=True)
+    analyzed_list_path = get_analyzed_list_path(args.output_dir)
+    analyzed_video_keys = migrate_done_files(args.output_dir, analyzed_list_path)
 
     total_saved = 0
     analyzed_count = 0
     skipped_count = 0
     for video_path in videos:
         print(f"Annotating {video_path}...")
-        saved_count = annotate_video(video_path, model, args, class_ids_by_name)
+        saved_count = annotate_video(
+            video_path,
+            model,
+            second_model,
+            args,
+            class_ids_by_name,
+            analyzed_video_keys,
+            analyzed_list_path,
+        )
         if saved_count is None:
             skipped_count += 1
             continue
